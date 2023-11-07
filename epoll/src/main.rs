@@ -1,6 +1,6 @@
-use std::net::TcpListener;
-use std::os::fd::IntoRawFd;
-use std::os::raw::c_void;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::os::fd::{FromRawFd, IntoRawFd};
 use std::os::unix::io::AsRawFd;
 use std::{io, ptr};
 
@@ -49,7 +49,6 @@ fn main() -> io::Result<()> {
 }
 
 fn accept(l: &mut TcpListener, ep_fd: i32) -> io::Result<()> {
-    // todo: 查明这里为啥不行
     let (stream, addr) = match l.accept() {
         Ok(v) => v,
         Err(err) => {
@@ -58,22 +57,14 @@ fn accept(l: &mut TcpListener, ep_fd: i32) -> io::Result<()> {
         }
     };
     stream.set_nonblocking(true)?;
-    //let stream = macros::syscall!(accept(l.as_raw_fd(), ptr::null_mut(),ptr::null_mut()))?;
 
     println!("connection from {addr}");
 
-    // 转化为裸 fd 避免连接被关闭
+    // @warn：转化为裸 fd 避免连接被关闭
     let stream = stream.into_raw_fd();
 
-    //let mut event = new_event(libc::EPOLLIN as u32, stream.as_raw_fd() as u64);
     let mut event = new_event(libc::EPOLLIN as u32, stream as u64);
-    let _ = macros::syscall!(epoll_ctl(
-        ep_fd,
-        libc::EPOLL_CTL_ADD,
-        //stream.as_raw_fd(),
-        stream,
-        &mut event
-    ))?;
+    let _ = macros::syscall!(epoll_ctl(ep_fd, libc::EPOLL_CTL_ADD, stream, &mut event))?;
 
     Ok(())
 }
@@ -83,20 +74,28 @@ fn new_event(events: u32, data: u64) -> libc::epoll_event {
 }
 
 fn recv(conn: i32, ep_fd: i32) -> io::Result<()> {
-    let mut buf = [0u8; 1024];
+    let mut stream = unsafe { TcpStream::from_raw_fd(conn) };
+    stream.set_nonblocking(true)?;
 
-    match macros::syscall!(recv(conn, buf.as_mut_ptr() as *mut c_void, buf.len(), 0))? {
-        0 => {
+    let mut buf = [0u8; 1024];
+    let mut keep = false;
+    match stream.read(&mut buf) {
+        Ok(0) => {
             println!("客户端已经断开连接");
             macros::syscall!(epoll_ctl(ep_fd, libc::EPOLL_CTL_DEL, conn, ptr::null_mut()))?;
-            macros::syscall!(close(conn))?;
         }
-        v if v > 0 => {
-            let msg = unsafe { std::str::from_utf8_unchecked(&buf[..(v as usize)]) };
+        Ok(n) => {
+            let msg = unsafe { std::str::from_utf8_unchecked(&buf[..n]) };
             println!("客户端说：{msg}");
-            macros::syscall!(send(conn, buf.as_ptr() as *const c_void, v as usize, 0))?;
+            let _ = stream.write_all(msg.as_bytes())?;
+            keep = true;
         }
-        _ => eprintln!("recv"),
+        Err(err) if err.kind() == ErrorKind::WouldBlock => keep = true,
+        Err(err) => return Err(err),
+    }
+
+    if keep {
+        let _ = stream.into_raw_fd();
     }
 
     Ok(())
