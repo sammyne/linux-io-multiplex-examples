@@ -1,4 +1,5 @@
 use std::net::TcpListener;
+use std::os::fd::IntoRawFd;
 use std::os::raw::c_void;
 use std::os::unix::io::AsRawFd;
 use std::{io, ptr};
@@ -48,17 +49,21 @@ fn main() -> io::Result<()> {
 }
 
 fn accept(l: &mut TcpListener, ep_fd: i32) -> io::Result<()> {
-    //let (stream, addr) = match l.accept() {
-    //    Ok(v) => v,
-    //    Err(err) => {
-    //        eprintln!("couldn't accept: {}", err);
-    //        return Err(err);
-    //    }
-    //};
-    //stream.set_nonblocking(true)?;
-    let stream = macros::syscall!(accept(l.as_raw_fd(), ptr::null_mut(),ptr::null_mut()))?;
+    // todo: 查明这里为啥不行
+    let (stream, addr) = match l.accept() {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("couldn't accept: {}", err);
+            return Err(err);
+        }
+    };
+    stream.set_nonblocking(true)?;
+    //let stream = macros::syscall!(accept(l.as_raw_fd(), ptr::null_mut(),ptr::null_mut()))?;
 
-    //println!("connection from {addr}");
+    println!("connection from {addr}");
+
+    // 转化为裸 fd 避免连接被关闭
+    let stream = stream.into_raw_fd();
 
     //let mut event = new_event(libc::EPOLLIN as u32, stream.as_raw_fd() as u64);
     let mut event = new_event(libc::EPOLLIN as u32, stream as u64);
