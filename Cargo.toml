@@ -1,6 +1,7 @@
 [workspace]
 members = [
-  "epoll"
+  "epoll",
+  "select"
 ]
 
 resolver = "2"
