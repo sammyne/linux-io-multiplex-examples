@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "epoll",
+  "poll",
   "select"
 ]
 
