@@ -60,7 +60,8 @@ unsafe fn feedback(fd: &mut libc::pollfd) -> io::Result<()> {
         Ok(n) => {
             let msg = std::str::from_utf8_unchecked(&buf[..n]);
             println!("feedback '{}'", msg);
-            conn.write(msg.as_bytes())?;
+            let n = conn.write(msg.as_bytes())?;
+            assert_eq!(n, msg.len());
             keep = true;
         }
         Err(err) if err.kind() == ErrorKind::WouldBlock => keep = true,
