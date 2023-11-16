@@ -95,6 +95,92 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
 int epoll_wait(int epfd, struct epoll_event * events, int maxevents, int timeout);
 ```
 
-## 2. 参考文献
+## 2. 温馨提示
+### 2.1. epoll 不能监听普通文件
+示例程序参见 [cannot_poll_file.rs](./src/bin/cannot_poll_file.rs)，`epoll_ctl` 时会报错如下
+```bash
+epoll_ctl: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+```
+
+具体原因为 `epoll_ctl` 内部会检查文件对象的 `f_op` 字段（类型为 `struct file_operations`）的 `poll` 字段是否为空。在 v6.6 的内核
+中，相关函数代码片段如下
+
+- [epoll_ctl](https://github.com/torvalds/linux/blob/v6.6/fs/eventpoll.c#L2267)
+    ```c
+    SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
+        struct epoll_event __user *, event)
+    {
+      struct epoll_event epds;
+
+      if (ep_op_has_event(op) &&
+          copy_from_user(&epds, event, sizeof(struct epoll_event)))
+        return -EFAULT;
+
+      return do_epoll_ctl(epfd, op, fd, &epds, false);
+    }
+    ```
+- [do_epoll_ctl](https://github.com/torvalds/linux/blob/v6.6/fs/eventpoll.c#L2111)
+    ```c
+    int do_epoll_ctl(int epfd, int op, int fd, struct epoll_event *epds,
+        bool nonblock)
+    {
+      // 此处省略其余代码
+
+      /*
+      * We have to check that the file structure underneath the file descriptor
+      * the user passed to us _is_ an eventpoll file. And also we do not permit
+      * adding an epoll file descriptor inside itself.
+      */
+      error = -EINVAL;
+      if (f.file == tf.file || !is_file_epoll(f.file))
+        goto error_tgt_fput;
+
+      // 此处省略其余代码
+    }
+    ```
+- [is_file_poll](https://github.com/torvalds/linux/blob/v6.6/fs/eventpoll.c#L338)
+    ```c
+    static inline int is_file_epoll(struct file *f)
+    {
+      return f->f_op == &eventpoll_fops;
+    }
+    ```
+
+`f_op` 的具体值随文件系统类型而定。可用 `df -T 文件/目录路径` 查询某个文件/目录所在文件系统的类型，样例如下
+
+```bash
+Filesystem     Type  1K-blocks      Used Available Use% Mounted on
+/dev/vdb1      ext4 1031916084 526704948 461155524  54% /github.com
+```
+
+可见，个人的文件系统类型为 ext4，对应的 `f_op` 实例（具体类型定义参见
+[file_operations](https://github.com/torvalds/linux/blob/v6.6/include/linux/fs.h#L1852)）为
+[ext4_file_operations](https://github.com/torvalds/linux/blob/v6.6/fs/ext4/file.c#L950) 如下，
+```c
+const struct file_operations ext4_file_operations = {
+	.llseek		= ext4_llseek,
+	.read_iter	= ext4_file_read_iter,
+	.write_iter	= ext4_file_write_iter,
+	.iopoll		= iocb_bio_iopoll,
+	.unlocked_ioctl = ext4_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= ext4_compat_ioctl,
+#endif
+	.mmap		= ext4_file_mmap,
+	.mmap_supported_flags = MAP_SYNC,
+	.open		= ext4_file_open,
+	.release	= ext4_release_file,
+	.fsync		= ext4_sync_file,
+	.get_unmapped_area = thp_get_unmapped_area,
+	.splice_read	= ext4_file_splice_read,
+	.splice_write	= iter_file_splice_write,
+	.fallocate	= ext4_fallocate,
+};
+```
+
+其 `poll` 字段没有设置，因此取默认值 `NULL`。
+
+## 3. 参考文献
 - [IO多路转接（复用）之epoll](https://subingwen.cn/linux/epoll/)
 - [Basic non-blocking IO using epoll in Rust](https://www.zupzup.org/epoll-with-rust/index.html)
+- [epoll 能监听普通文件吗？](https://cloud.tencent.com/developer/article/1835294)

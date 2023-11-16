@@ -1,5 +1,5 @@
 /// ref: https://github.com/tokio-rs/mio/blob/v0.8.9/src/sys/unix/mod.rs#L5
-//#[macro_export]
+#[macro_export]
 macro_rules! syscall {
     ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
         let res = unsafe { libc::$fn($($arg, )*) };
@@ -11,4 +11,4 @@ macro_rules! syscall {
     }};
 }
 
-pub(crate) use syscall;
+pub use syscall;
